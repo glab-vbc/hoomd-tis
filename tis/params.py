@@ -119,3 +119,33 @@ HB_KD = HB_RNA_KR
 HB_KTHETA = HB_RNA_KTHETA
 HB_KPSI = HB_RNA_KPSI
 DH_MANNING_B_DNA = DH_B_RNA
+
+
+# ===================== A-form reference geometry (generated) =====================
+# Equilibria obtained by coarse-graining ideal A-form RNA duplexes (PDB 1RNA, 157D,
+# 1QC0) to P/S/B beads (partition: P={P,OP1,OP2,O5'}, S=ribose ring, B=base ring;
+# mass-weighted COMs). Distances in A; angles/dihedrals stored in radians (deg in
+# comments). Dihedral means are circular (resultant length R>0.87). See MODEL.md.
+
+# --- bond rho0 (A); keys match io.py bond types (SP=S_i->P_{i+1}, PS=P_i->S_i) ---
+BOND_RNA_R0 = {"SP": 3.66, "PS": 4.45, "SA": 4.86, "SC": 4.29, "SG": 4.96, "SU": 4.36}
+
+# --- angle alpha0 (rad) ---  PSP/SPS backbone; PS<base> base-swing
+ANGLE_RNA_A0 = {"PSP": 88.8 * _DEG, "SPS": 91.4 * _DEG,
+                "PSA": 93.7 * _DEG, "PSC": 87.2 * _DEG,
+                "PSG": 95.9 * _DEG, "PSU": 85.4 * _DEG}
+
+# --- stacking references ---  r0 per 5'->3' dimer (A); phi refs ~sequence-independent
+STACK_R0 = {"AA": 3.91, "AC": 3.63, "AG": 4.37, "AU": 3.67, "CA": 4.38, "CC": 4.21,
+            "CG": 4.71, "CU": 4.09, "GA": 4.20, "GC": 3.68, "GG": 4.08, "GU": 3.66,
+            "UA": 4.39, "UC": 4.10, "UG": 4.64, "UU": 4.07}   # UC=pooled (absent in set)
+STACK_PHI1_0 = 147.7 * _DEG     # dihedral(P_i, S_i, P_{i+1}, S_{i+1})
+STACK_PHI2_0 = -173.4 * _DEG    # dihedral(P_{i+2}, S_{i+1}, P_{i+1}, S_i)
+
+# --- H-bond references (Watson-Crick B-B pair) ---  sorted-pair keys
+HB_R0 = {"AU": 5.55, "CG": 5.32, "GU": 4.55}   # B_i-B_j distance (A)
+HB_TH1_0 = 143.1 * _DEG         # angle(S_i, B_i, B_j)
+HB_TH2_0 = 141.6 * _DEG         # angle(S_j, B_j, B_i)
+HB_PSI_0 = -21.8 * _DEG         # dihedral(S_i, B_i, B_j, S_j)
+HB_PSI1_0 = -173.0 * _DEG       # dihedral(P_i, S_i, B_i, B_j)
+HB_PSI2_0 = -173.0 * _DEG       # dihedral(P_j, S_j, B_j, B_i)
