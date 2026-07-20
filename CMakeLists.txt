@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.9 FATAL_ERROR)
+project(tis_engine LANGUAGES CXX)
+find_package(HOOMD REQUIRED)
+message(STATUS "Found HOOMD: ${HOOMD_DIR}")
+add_subdirectory(src)
