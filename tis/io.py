@@ -164,8 +164,9 @@ def build_strand_snapshot(
         typeid[s_idx] = _PTYPEID["S"]
         typeid[b_idx] = _PTYPEID[base]
 
-    # centre the molecule at the origin
-    pos -= pos.mean(axis=0)
+    # centre on the bounding-box midpoint (not the mean) so an asymmetric / drifting
+    # chain still fits inside the span-sized box below (avoids ParticleData errors).
+    pos -= 0.5 * (pos.min(axis=0) + pos.max(axis=0))
 
     # --- bonds -------------------------------------------------------------
     bond_groups: list[tuple[int, int]] = []
