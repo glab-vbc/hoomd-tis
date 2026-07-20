@@ -117,15 +117,43 @@ Divalent ions (Mg²⁺): **not** in the base DH model — later TIS-RNA variants
 
 ---
 
+## RNA — exact geometry (Denesyuk & Thirumalai 2013, Figs 2 & 4)
+
+Stacking of consecutive nucleotides i, i+1:
+- `r    = dist(B_i, B_{i+1})`
+- `phi1 = dihedral(P_i,   S_i,   P_{i+1}, S_{i+1})`     (Fig 2: φ1(P1,S1,P2,S2))
+- `phi2 = dihedral(P_{i+2}, S_{i+1}, P_{i+1}, S_i)`     (Fig 2: φ2(P3,S2,P2,S1))
+
+  phi1 needs P_i, phi2 needs P_{i+2} → terminal steps need edge handling (5' may lack
+  a phosphate; the 3'-most step lacks P_{i+2}).
+
+Hydrogen bonding is **site-dependent** (Fig 4): each atomistic H-bond maps to the two
+coarse sites it connects (B/S/P) plus their backbone neighbours. For a Watson–Crick
+base pair (a B–B bond between nucleotides i, j):
+- `r  = dist(B_i, B_j)`
+- `th1 = angle(S_i, B_i, B_j)`, `th2 = angle(S_j, B_j, B_i)`
+- `ps  = dihedral(S_i, B_i, B_j, S_j)` and two dihedrals into the downstream backbone
+  (P_{i+1}/P_{j+1}), by analogy with Fig 4(a).
+
+k-values differ from DNA: stacking `k_r=1.4, k_phi=4`; H-bond `k_r=5, k_theta=1.5,
+k_psi=0.15`; bonds `S→P=64, P→S=23, S–B=10`; angles `5` (with base) / `20` (backbone).
+
 ## Parameter status
 
 - **Forms:** complete for all six terms (above).
-- **DNA parameters:** partially transcribed (bonds full; angles/stacking/HB tables
-  only representative rows so far — need the complete Tables 3–4).
-- **RNA parameters:** NOT yet obtained. Need Denesyuk–Thirumalai 2013 for: A-form
-  reference geometry (l0, angles, dihedral references), RNA nearest-neighbor stacking
-  table (16 steps, fit to RNA melting), RNA HB geometry incl. **G–U wobble**, and the
-  RNA charge-renormalization `b`. The forms are identical; only the constants differ.
+- **RNA parameters: COMPLETE** (in `tis/params.py`) — bonds, angles, WCA, the full
+  16-dimer temperature-dependent stacking table `UST0=−h+kB(T−Tm)s` (Tables 1–2), the
+  three fitted parameters `ΔG0=0.6`, `U_HB0=−2.43`, `b=4.4 Å`, Debye–Hückel with the
+  eq-12 dielectric (phosphate charge computes to −0.605e at 37 °C, matching the paper).
+- **REMAINING — reference geometry:** the paper does *not* tabulate the equilibrium
+  `rho0` (bonds), `alpha0` (angles), `r0/phi0` (stacking), `r0/theta0/psi0` (H-bond);
+  these are obtained by **coarse-graining an ideal A-form RNA helix**. Must be generated
+  (build an A-form duplex, place P/S/B at group COMs, measure the coords). This is the
+  last piece for a runnable, quantitatively-faithful RNA model.
+- **Code TODO:** `tis/custom_forces.py` still uses the *provisional* stacking/H-bond
+  site definitions from before the paper — update them to the exact Fig-2/Fig-4
+  definitions above (the FD force machinery is unchanged; only the index tuples move).
+- **DNA parameters:** partial (from arXiv:1802.01612), kept for reference.
 
 ## HOOMD mapping
 
