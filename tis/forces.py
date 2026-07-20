@@ -85,21 +85,33 @@ def yukawa_epsilon(t_kelvin: float, manning_b: float = params.DH_MANNING_B_DNA) 
 # Parameter resolution                                                         #
 # --------------------------------------------------------------------------- #
 def _resolve_bond(bond_type: str):
-    """(k_r, r0) for a bond type, with the RNA placeholder SU -> DNA ST."""
-    if bond_type in params.BOND_DNA:
-        return params.BOND_DNA[bond_type]
-    if bond_type == "SU":
-        return params.BOND_DNA["ST"]     # uracil borrows thymine (placeholder)
+    """(k_r, r0) for a bond type from the FINAL RNA params (A-form geometry).
+
+    Backbone SP/PS use their own force constant; every base bond S<base>
+    (SA/SC/SG/SU) shares the single S-B constant BOND_RNA_K["SB"], with its own
+    A-form length BOND_RNA_R0[type].
+    """
+    if bond_type in ("SP", "PS"):
+        return params.BOND_RNA_K[bond_type], params.BOND_RNA_R0[bond_type]
+    if bond_type in ("SA", "SC", "SG", "SU"):
+        return params.BOND_RNA_K["SB"], params.BOND_RNA_R0[bond_type]
     raise KeyError(f"no bond parameters for type {bond_type!r} "
-                   f"(available: {sorted(params.BOND_DNA)})")
+                   f"(available: SP, PS, SA, SC, SG, SU)")
 
 
 def _resolve_angle(angle_type: str):
-    """(k_a, a0[rad]) for an angle type from params.ANGLE_DNA."""
-    if angle_type in params.ANGLE_DNA:
-        return params.ANGLE_DNA[angle_type]
-    raise KeyError(f"no angle parameters for type {angle_type!r} "
-                   f"(available: {sorted(params.ANGLE_DNA)})")
+    """(k_a, a0[rad]) for an angle type from the FINAL RNA params.
+
+    Force constant is ANGLE_RNA_K_BASE if the triplet involves a base letter
+    (PSA/PSC/PSG/PSU) else ANGLE_RNA_K_BACKBONE (PSP/SPS); a0 is the A-form
+    equilibrium ANGLE_RNA_A0[type].
+    """
+    if angle_type not in params.ANGLE_RNA_A0:
+        raise KeyError(f"no angle parameters for type {angle_type!r} "
+                       f"(available: {sorted(params.ANGLE_RNA_A0)})")
+    has_base = any(c in "AGCU" for c in angle_type)
+    k_a = params.ANGLE_RNA_K_BASE if has_base else params.ANGLE_RNA_K_BACKBONE
+    return k_a, params.ANGLE_RNA_A0[angle_type]
 
 
 # --------------------------------------------------------------------------- #
@@ -192,7 +204,8 @@ def build_forces(
     # Optionally append the two many-body custom terms (stacking + HB), giving
     # the FULL 6-term TIS model. Native four stay intact and first in the list.
     if include_custom:
-        force_list.append(stacking_force(snapshot, **(stacking_kwargs or {})))
+        force_list.append(stacking_force(snapshot, temperature=temperature,
+                                         **(stacking_kwargs or {})))
         force_list.append(
             hydrogen_bonding_force(snapshot, **(hbond_kwargs or {})))
 
@@ -219,31 +232,33 @@ def _sequence_from_snapshot(snapshot: hoomd.Snapshot) -> str:
     return "".join(types[typeid[3 * k + 2]] for k in range(n))
 
 
-def stacking_force(snapshot: hoomd.Snapshot, **kwargs):
+def stacking_force(snapshot: hoomd.Snapshot, temperature: float = 300.0,
+                   **kwargs):
     """Single-stranded stacking U_S (MODEL.md sec. 3, Eq. 9) as a custom force.
 
-    Consecutive-base term: base-base distance + two backbone dihedrals. Force
-    constants k_l / k_phi are the real params.STACK_KL / STACK_KPHI; the well
-    depth U0 and the per-step reference geometry (l0, phi1_0, phi2_0) are
-    PLACEHOLDER -- by default the references are measured from the initial
-    ``snapshot`` geometry so U ~ U0 at t=0. See custom_forces.TISStacking.
+    Consecutive-nucleotide term: base-base distance + two backbone dihedrals
+    (phi2 omitted at the 3'-terminal step). Uses the FINAL RNA params: force
+    constants params.STACK_RNA_KR / STACK_RNA_KPHI, per-dimer well depth
+    params.stacking_U0(XY, temperature) and A-form references
+    STACK_R0 / STACK_PHI1_0 / STACK_PHI2_0 (the sequence is recovered from the
+    snapshot). See custom_forces.TISStacking.
 
-    Extra ``kwargs`` are forwarded to TISStacking (U0, k_l, k_phi, strands).
+    Extra ``kwargs`` are forwarded to TISStacking (k_l, k_phi, strands).
     """
     from . import custom_forces as cf
     n = snapshot.particles.N // 3
-    pos = np.asarray(snapshot.particles.position, dtype=float)
-    box = np.asarray(snapshot.configuration.box[:3], dtype=float)
-    return cf.TISStacking(n, ref_positions=pos, box=box, **kwargs)
+    seq = _sequence_from_snapshot(snapshot)
+    return cf.TISStacking(n, sequence=seq, temperature=temperature, **kwargs)
 
 
 def hydrogen_bonding_force(snapshot: hoomd.Snapshot, **kwargs):
     """Hydrogen bonding U_HB (MODEL.md sec. 4, Eq. 13) as a custom force.
 
     Complementary-base term (A-U, G-C, G-U wobble; sequence separation >= 3),
-    distance-gated. Force constants k_d / k_theta / k_psi are the real
-    params.HB_KD / HB_KTHETA / HB_KPSI; the well depths (x2 A-U, x3 G-C, x2 G-U*)
-    and the reference geometry (d0/theta0/psi0) are PLACEHOLDER. See
+    distance-gated. Uses the FINAL RNA params: force constants params.HB_RNA_KR /
+    HB_RNA_KTHETA / HB_RNA_KPSI, per-pair well depth
+    params.HB_RNA_U0 * HB_MULT (x2 A-U, x3 G-C, x2 G-U), per-pair d0 from
+    params.HB_R0 and the distinct A-form angle/dihedral references. See
     custom_forces.TISHydrogenBonding.
 
     Extra ``kwargs`` are forwarded to TISHydrogenBonding.

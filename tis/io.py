@@ -17,11 +17,11 @@ Bonds
     "SP"  S_i -- P_{i+1}       (r0 = 3.75 A)   to the next nucleotide (3' side)
     "S?"  S_i -- B_i           base bond, ? in {A,G,C,U}
 
-Angles (only the ones with parameters in tis/params.ANGLE_DNA are emitted; the
-rest are a documented TODO until the full angle table lands):
+Angles (all backbone + base-swing types are emitted now that the full A-form
+reference geometry is in tis/params.ANGLE_RNA_A0):
     "PSP"  P_i -- S_i -- P_{i+1}       (backbone, centred on the sugar)
     "SPS"  S_{i-1} -- P_i -- S_i       (backbone, centred on the phosphate)
-    "PS?"  P_i -- S_i -- B_i           (base swing, only "PSA" available so far)
+    "PS?"  P_i -- S_i -- B_i           (base swing, ? in {A,G,C,U})
 
 Particle types are ["P", "S", "A", "G", "C", "U"] (RNA). Masses are 1.0 for a
 first pass (NOTE: the paper uses site-specific masses; equalising them changes
@@ -49,21 +49,16 @@ PARTICLE_TYPES = ["P", "S", "A", "G", "C", "U"]
 _PTYPEID = {t: i for i, t in enumerate(PARTICLE_TYPES)}
 BASES = ("A", "G", "C", "U")
 
-# Base-bond equilibrium lengths (A). RNA uracil (SU) borrows the DNA thymine (ST)
-# value as a placeholder until RNA bonds are transcribed -- see params.BOND_DNA.
-_BASE_BOND_R0 = {
-    "A": params.BOND_DNA["SA"][1],
-    "G": params.BOND_DNA["SG"][1],
-    "C": params.BOND_DNA["SC"][1],
-    "U": params.BOND_DNA["ST"][1],   # placeholder: thymine value for uracil
-}
+# Base-bond equilibrium lengths (A) from the A-form reference geometry
+# (params.BOND_RNA_R0: SA/SC/SG/SU).
+_BASE_BOND_R0 = {b: params.BOND_RNA_R0["S" + b] for b in BASES}
 
-_R0_PS = params.BOND_DNA["PS"][1]    # 3.74 A  (P_i -- S_i)
-_R0_SP = params.BOND_DNA["SP"][1]    # 3.75 A  (S_i -- P_{i+1})
+_R0_PS = params.BOND_RNA_R0["PS"]    # 4.45 A  (P_i -- S_i)
+_R0_SP = params.BOND_RNA_R0["SP"]    # 3.66 A  (S_i -- P_{i+1})
 
 # Backbone reference angles (rad) used only to shape the initial zig-zag.
-_A_PSP = params.ANGLE_DNA["PSP"][1]  # ~123.30 deg  (centred on sugar)
-_A_SPS = params.ANGLE_DNA["SPS"][1]  # ~ 94.60 deg  (centred on phosphate)
+_A_PSP = params.ANGLE_RNA_A0["PSP"]  # ~88.8 deg  (centred on sugar)
+_A_SPS = params.ANGLE_RNA_A0["SPS"]  # ~91.4 deg  (centred on phosphate)
 
 
 def _rot_y(v: np.ndarray, angle: float) -> np.ndarray:
@@ -135,9 +130,9 @@ def build_strand_snapshot(
     -----
     * A 5'-terminal phosphate P_0 is included so every nucleotide has all three
       sites; it simply carries no SPS angle.
-    * Base *angles* are emitted only for base types whose "PS?" key exists in
-      params.ANGLE_DNA (currently only "PSA"); base *bonds* are always emitted
-      (uracil borrows the thymine "ST" parameters). See build notes in forces.py.
+    * All backbone (PSP/SPS) and base-swing (PSA/PSC/PSG/PSU) angles are emitted;
+      every type has an A-form equilibrium in params.ANGLE_RNA_A0. Base bonds are
+      always emitted (S<base> lengths from params.BOND_RNA_R0).
     * Single strand only. Double strand is a TODO (build a second antiparallel
       strand offset in x and concatenate particles/bonds/angles).
     """
@@ -183,25 +178,22 @@ def build_strand_snapshot(
             p_next = 3 * (i + 1)
             bond_groups.append((s_idx, p_next)); bond_typenames.append("SP")  # S_i--P_{i+1}
 
-    # --- angles (only those with parameters available) ---------------------
-    available_angles = set(params.ANGLE_DNA.keys())   # {"PSP","SPS","PSA"} so far
+    # --- angles (all backbone + base-swing types; every one has a param) ----
     angle_groups: list[tuple[int, int, int]] = []
     angle_typenames: list[str] = []
     for i, base in enumerate(seq):
         p_idx, s_idx, b_idx = 3 * i, 3 * i + 1, 3 * i + 2
         # PSP centred on sugar S_i : P_i -- S_i -- P_{i+1}
-        if i < n - 1 and "PSP" in available_angles:
+        if i < n - 1:
             angle_groups.append((p_idx, s_idx, 3 * (i + 1)))
             angle_typenames.append("PSP")
         # SPS centred on phosphate P_i : S_{i-1} -- P_i -- S_i
-        if i >= 1 and "SPS" in available_angles:
+        if i >= 1:
             angle_groups.append((3 * (i - 1) + 1, p_idx, s_idx))
             angle_typenames.append("SPS")
-        # base swing P_i -- S_i -- B_i (only "PSA" is available so far)
-        base_angle = "PS" + base
-        if base_angle in available_angles:
-            angle_groups.append((p_idx, s_idx, b_idx))
-            angle_typenames.append(base_angle)
+        # base swing P_i -- S_i -- B_i (PSA/PSC/PSG/PSU)
+        angle_groups.append((p_idx, s_idx, b_idx))
+        angle_typenames.append("PS" + base)
 
     # --- assemble snapshot -------------------------------------------------
     if box is None:

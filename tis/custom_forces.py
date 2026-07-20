@@ -19,18 +19,18 @@ just supply the list of interactions (their coordinate topology, force
 constants, reference values and well depth U0).
 
 =============================================================================
-PROVISIONAL geometry choices  (reconcile with the paper's exact definitions)
+Coordinate topology  (exact paper definitions -- Denesyuk-Thirumalai 2013)
 =============================================================================
-The paper (Denesyuk-Thirumalai 2013 for RNA; Chakraborty-Hori-Thirumalai 2018
-for DNA) fixes exactly which sites enter each dihedral/angle. Those RNA tables
-are not yet in hand, so the coordinate choices below are our best reading of
-MODEL.md and are marked PROVISIONAL. They are collected in one place so they are
-trivial to swap:
+The site tuples entering each dihedral/angle are now the paper's exact
+definitions (MODEL.md, Figs 2 & 4):
 
-  Stacking (consecutive bases i, i+1 along a strand):
+  Stacking (consecutive nucleotides i, i+1 along a strand):
     l    = dist(B_i, B_{i+1})
-    phi1 = dihedral(S_i, P_{i+1}, S_{i+1}, B_{i+1})
-    phi2 = dihedral(B_i, S_i, P_{i+1}, S_{i+1})
+    phi1 = dihedral(P_i,     S_i,     P_{i+1}, S_{i+1})     [Fig 2, phi1]
+    phi2 = dihedral(P_{i+2}, S_{i+1}, P_{i+1}, S_i)         [Fig 2, phi2]
+  phi1 needs P_i (always present -- io.py includes a 5'-terminal P_0). phi2 needs
+  P_{i+2}; at the 3'-terminal step (i = n_nucleotides-2) that phosphate does not
+  exist, so the phi2 coordinate is OMITTED for that step (2 coords instead of 3).
 
   Hydrogen bonding (complementary bases i, j):
     d   = dist(B_i, B_j)
@@ -41,23 +41,23 @@ trivial to swap:
     ps3 = dihedral(P_j, S_j, B_j, B_i)
 
 =============================================================================
-PLACEHOLDER parameters  (RNA tables are TODO -- see params.py)
+Parameters
 =============================================================================
-Force constants k_* are the real DNA/RNA values from params.py (STACK_KL,
-STACK_KPHI, HB_KD, HB_KTHETA, HB_KPSI). Everything else below is a clearly
-marked PLACEHOLDER until the RNA reference-geometry / well-depth tables arrive:
+Force constants, per-dimer stacking well depths, per-pair H-bond depths and the
+A-form reference geometry are the FINAL RNA values from params.py:
 
-  * STACK_U0_PLACEHOLDER   nominal stacking well depth (-4 kcal/mol).
-  * stacking references    l0, phi1_0, phi2_0 default to the values MEASURED
-                           from the initial geometry passed at construction
-                           (so U ~ U0 at t=0); override per call if desired.
-  * HB_U0_SINGLE           -2.43 kcal/mol per H-bond (RNA), x2 A-U, x3 G-C,
-                           x2 G-U (the G-U multiplicity is itself a placeholder).
-  * HB_D0/TH0/PS0_*        nominal base-pair reference geometry.
+  * Stacking:  k_l = STACK_RNA_KR, k_phi = STACK_RNA_KPHI; per-dimer well depth
+    U0 = params.stacking_U0(XY, T); references l0 = STACK_R0[XY],
+    phi1_0 = STACK_PHI1_0, phi2_0 = STACK_PHI2_0 (used when a ``sequence`` is
+    given). Without a sequence the class falls back to a scalar placeholder U0
+    and references measured from ``ref_positions`` / set via ``set_references``
+    (this path is exercised by the finite-difference test).
+  * Hydrogen bonding:  k_d = HB_RNA_KR, k_theta = HB_RNA_KTHETA,
+    k_psi = HB_RNA_KPSI; per-pair d0 = HB_R0[sorted pair]; distinct references
+    HB_TH1_0/HB_TH2_0/HB_PSI_0/HB_PSI1_0/HB_PSI2_0; well depth
+    U0 = HB_RNA_U0 * HB_MULT[(base_i, base_j)] (x2 A-U, x3 G-C, x2 G-U wobble).
 
-None of these placeholders is trustworthy for thermodynamics; they exist only so
-the two terms are wired, differentiable and MD-stable for testing. Folding is NOT
-expected from them.
+STACK_U0_PLACEHOLDER remains only as the no-sequence fallback well depth.
 """
 from __future__ import annotations
 
@@ -71,21 +71,12 @@ import hoomd.md as md
 from . import params
 
 # --------------------------------------------------------------------------- #
-# PLACEHOLDER parameters (see module docstring)                               #
+# Modelling inputs / no-sequence fallback                                     #
 # --------------------------------------------------------------------------- #
-STACK_U0_PLACEHOLDER = -4.0          # kcal/mol, nominal stacking well depth
+# Fallback stacking well depth used ONLY when no sequence is supplied (the
+# finite-difference test); with a sequence the per-dimer params.stacking_U0 wins.
+STACK_U0_PLACEHOLDER = -4.0          # kcal/mol
 
-HB_U0_SINGLE = -2.43                 # kcal/mol per single RNA H-bond
-# multiplicity of the complementary pair; G-U (wobble) value is a PLACEHOLDER.
-HB_MULTIPLICITY = {
-    ("A", "U"): 2, ("U", "A"): 2,
-    ("G", "C"): 3, ("C", "G"): 3,
-    ("G", "U"): 2, ("U", "G"): 2,   # PLACEHOLDER: G-U wobble strength
-}
-# Nominal reference geometry for an "ideal" base pair (all PLACEHOLDER).
-HB_D0_PLACEHOLDER = 5.8              # A   base-base distance at contact
-HB_TH0_PLACEHOLDER = 2.60           # rad S-B-B angle (~149 deg)
-HB_PS0_PLACEHOLDER = 0.0            # rad backbone dihedrals
 # Distance below which a complementary pair is considered "in contact" and the
 # HB term is switched on. A hard cutoff (truncation) -- a production term would
 # use a smooth switch; kept hard here and only used away from the cutoff.
@@ -316,96 +307,149 @@ class TISStacking(_ManyBodyCustomForce):
     """Single-stranded stacking between consecutive bases (BONDED-style).
 
     One interaction per consecutive nucleotide pair (i, i+1) along each strand,
-    with coordinates (PROVISIONAL, see module docstring):
+    with the paper's exact coordinates (MODEL.md, Fig 2):
         l    = dist(B_i, B_{i+1})                            k = k_l
-        phi1 = dihedral(S_i, P_{i+1}, S_{i+1}, B_{i+1})      k = k_phi
-        phi2 = dihedral(B_i, S_i, P_{i+1}, S_{i+1})          k = k_phi
+        phi1 = dihedral(P_i,     S_i,     P_{i+1}, S_{i+1})  k = k_phi
+        phi2 = dihedral(P_{i+2}, S_{i+1}, P_{i+1}, S_i)      k = k_phi
+
+    phi2 needs P_{i+2}; at the 3'-terminal step it does not exist and is OMITTED
+    (that interaction then has 2 coordinates, U0 / (1 + k_l(l-l0)^2 +
+    k_phi(phi1-phi1_0)^2)).
 
     Parameters
     ----------
     n_nucleotides : int
         Number of nucleotides in the (single) strand; sites are P=3k, S=3k+1,
         B=3k+2.
+    sequence : str, optional
+        RNA sequence (A/G/C/U). When given, each pair's well depth and
+        references are the FINAL params values: per 5'->3' dimer XY,
+        U0 = params.stacking_U0(XY, temperature), l0 = params.STACK_R0[XY],
+        phi1_0 = params.STACK_PHI1_0, phi2_0 = params.STACK_PHI2_0.
+    temperature : float
+        Temperature (K) for the sequence-dependent well depth. Default 300.
     ref_positions : array (N,3), optional
-        Geometry from which the per-interaction references l0/phi1_0/phi2_0 are
-        MEASURED (PLACEHOLDER). Defaults to ``None``; if not given and no
-        explicit references are supplied, references are 0 (must be set later).
-        Pass the initial snapshot positions so U ~ U0 at t=0.
+        No-sequence path only: geometry from which references l0/phi1_0/phi2_0
+        are MEASURED (so U ~ U0 at t=0). Ignored when ``sequence`` is given.
     box : array (3,), optional
         Box lengths for measuring references (needed if ref_positions given).
     U0, k_l, k_phi : float
-        Well depth (PLACEHOLDER) and force constants (params.STACK_KL/KPHI).
+        No-sequence fallback well depth (STACK_U0_PLACEHOLDER) and force
+        constants (default params.STACK_RNA_KR / STACK_RNA_KPHI).
     strands : list[range], optional
         Explicit per-strand nucleotide-index ranges (for multi-strand systems).
         Defaults to a single strand 0..n_nucleotides-1.
     """
 
     def __init__(self, n_nucleotides: int,
+                 sequence: Optional[str] = None,
+                 temperature: float = 300.0,
                  ref_positions: Optional[np.ndarray] = None,
                  box: Optional[np.ndarray] = None,
                  U0: float = STACK_U0_PLACEHOLDER,
-                 k_l: float = params.STACK_KL,
-                 k_phi: float = params.STACK_KPHI,
+                 k_l: float = params.STACK_RNA_KR,
+                 k_phi: float = params.STACK_RNA_KPHI,
                  strands: Optional[Sequence[Sequence[int]]] = None):
         super().__init__(3 * n_nucleotides)
         self.n_nucleotides = int(n_nucleotides)
-        self.U0 = float(U0)
+        self.temperature = float(temperature)
         self.k_l = float(k_l)
         self.k_phi = float(k_phi)
+
+        seq = None
+        if sequence is not None:
+            seq = sequence.strip().upper().replace("T", "U")
+            if len(seq) != self.n_nucleotides:
+                raise ValueError("sequence length != n_nucleotides")
+
         if strands is None:
             strands = [range(self.n_nucleotides)]
-        # build the (coord-topology) list of consecutive pairs
+        # consecutive pairs, each tagged with the i+2 nucleotide index used for
+        # phi2 (or None at the 3'-terminal step, where P_{i+2} does not exist).
         self._pairs: List[Tuple[int, int]] = []
+        self._kk: List[Optional[int]] = []
         for strand in strands:
             s = list(strand)
-            for a, b in zip(s[:-1], s[1:]):
-                self._pairs.append((a, b))
+            for m in range(len(s) - 1):
+                self._pairs.append((s[m], s[m + 1]))
+                self._kk.append(s[m + 2] if (m + 2) < len(s) else None)
 
-        # references (PLACEHOLDER): measure from ref_positions if provided.
-        self._refs: List[Tuple[float, float, float]] = []
-        for (i, j) in self._pairs:
-            if ref_positions is not None:
-                if box is None:
-                    raise ValueError("box required to measure references")
-                self._refs.append(self._measure(np.asarray(ref_positions,
-                                                            float),
-                                                 np.asarray(box, float), i, j))
+        # per-pair well depth and (l0, phi1_0, phi2_0) references. phi2_0 is None
+        # for a terminal step. With a sequence -> FINAL params values; otherwise
+        # -> scalar fallback U0 and measured / zero references.
+        self._U0s: List[float] = []
+        self._refs: List[Tuple[float, float, Optional[float]]] = []
+        for (i, j), kk in zip(self._pairs, self._kk):
+            if seq is not None:
+                dimer = seq[i] + seq[j]
+                self._U0s.append(params.stacking_U0(dimer, self.temperature))
+                phi2_0 = None if kk is None else params.STACK_PHI2_0
+                self._refs.append((params.STACK_R0[dimer],
+                                   params.STACK_PHI1_0, phi2_0))
             else:
-                self._refs.append((0.0, 0.0, 0.0))
+                self._U0s.append(float(U0))
+                if ref_positions is not None:
+                    if box is None:
+                        raise ValueError("box required to measure references")
+                    self._refs.append(self._measure(
+                        np.asarray(ref_positions, float),
+                        np.asarray(box, float), i, j, kk))
+                else:
+                    self._refs.append((0.0, 0.0, None if kk is None else 0.0))
 
-    @staticmethod
-    def _coords_for(i: int, j: int):
-        """Site indices (Bi,Bj / Si,Pj,Sj,Bj / Bi,Si,Pj,Sj) for pair (i,j=i+1)."""
+    def _coords_for(self, i: int, j: int, kk: Optional[int]):
+        """Site index tuples for pair (i, j=i+1); phi2 is None at a terminal step.
+
+        l    = (B_i, B_j)
+        phi1 = (P_i, S_i, P_j, S_j)
+        phi2 = (P_{i+2}, S_j, P_j, S_i)   or None if kk is None
+        """
         Pi, Si, Bi = 3 * i, 3 * i + 1, 3 * i + 2
         Pj, Sj, Bj = 3 * j, 3 * j + 1, 3 * j + 2
         l_idx = (Bi, Bj)
-        phi1_idx = (Si, Pj, Sj, Bj)
-        phi2_idx = (Bi, Si, Pj, Sj)
+        phi1_idx = (Pi, Si, Pj, Sj)
+        phi2_idx = None if kk is None else (3 * kk, Sj, Pj, Si)
         return l_idx, phi1_idx, phi2_idx
 
-    def _measure(self, pos, box, i, j):
-        l_idx, phi1_idx, phi2_idx = self._coords_for(i, j)
+    def _measure(self, pos, box, i, j, kk):
+        l_idx, phi1_idx, phi2_idx = self._coords_for(i, j, kk)
         l = _dist_value_grad(pos[l_idx[0]], pos[l_idx[1]], box)[0]
         phi1 = _dihedral_value_grad(*[pos[k] for k in phi1_idx], box)[0]
-        phi2 = _dihedral_value_grad(*[pos[k] for k in phi2_idx], box)[0]
+        phi2 = (None if phi2_idx is None
+                else _dihedral_value_grad(*[pos[k] for k in phi2_idx], box)[0])
         return (l, phi1, phi2)
 
-    def set_references(self, refs: Sequence[Tuple[float, float, float]]):
-        """Override per-interaction (l0, phi1_0, phi2_0) references."""
+    def set_references(self, refs: Sequence[Sequence[float]]):
+        """Override per-interaction references.
+
+        Each entry is (l0, phi1_0) or (l0, phi1_0, phi2_0); the phi2_0 slot is
+        ignored for a 3'-terminal step (which carries no phi2 coordinate).
+        """
         if len(refs) != len(self._pairs):
-            raise ValueError("need one (l0,phi1_0,phi2_0) per consecutive pair")
-        self._refs = [tuple(map(float, r)) for r in refs]
+            raise ValueError("need one (l0,phi1_0[,phi2_0]) per consecutive pair")
+        new: List[Tuple[float, float, Optional[float]]] = []
+        for r, kk in zip(refs, self._kk):
+            r = list(r)
+            l0, phi1_0 = float(r[0]), float(r[1])
+            if kk is None:
+                phi2_0 = None
+            else:
+                phi2_0 = float(r[2]) if len(r) > 2 and r[2] is not None else 0.0
+            new.append((l0, phi1_0, phi2_0))
+        self._refs = new
 
     def interactions(self, positions=None, box=None) -> List[Interaction]:
         inters: List[Interaction] = []
-        for (i, j), (l0, phi1_0, phi2_0) in zip(self._pairs, self._refs):
-            l_idx, phi1_idx, phi2_idx = self._coords_for(i, j)
+        for (i, j), kk, U0, (l0, phi1_0, phi2_0) in zip(
+                self._pairs, self._kk, self._U0s, self._refs):
+            l_idx, phi1_idx, phi2_idx = self._coords_for(i, j, kk)
             coords = [
                 ("dist", l_idx, self.k_l, l0),
                 ("dihedral", phi1_idx, self.k_phi, phi1_0),
-                ("dihedral", phi2_idx, self.k_phi, phi2_0),
             ]
-            inters.append((self.U0, coords))
+            if phi2_idx is not None:
+                coords.append(("dihedral", phi2_idx, self.k_phi, phi2_0))
+            inters.append((U0, coords))
         return inters
 
 
@@ -418,7 +462,7 @@ class TISHydrogenBonding(_ManyBodyCustomForce):
     Candidate pairs are complementary bases (A-U, G-C, G-U wobble) with sequence
     separation >= ``min_seq_sep``; an interaction is active only while the
     base-base distance is below ``contact_cutoff`` (a hard truncation -- a
-    production term needs a smooth switch). Coordinates (PROVISIONAL):
+    production term needs a smooth switch). Coordinates (MODEL.md, Fig 4):
         d   = dist(B_i, B_j)                          k = k_d
         th1 = angle(S_i, B_i, B_j)                    k = k_theta
         th2 = angle(S_j, B_j, B_i)                    k = k_theta
@@ -426,40 +470,42 @@ class TISHydrogenBonding(_ManyBodyCustomForce):
         ps2 = dihedral(P_i, S_i, B_i, B_j)            k = k_psi
         ps3 = dihedral(P_j, S_j, B_j, B_i)            k = k_psi
 
-    Well depth U0 = HB_U0_SINGLE x multiplicity (x2 A-U, x3 G-C, x2 G-U*), all
-    PLACEHOLDER; reference geometry (d0/theta0/psi0) is nominal PLACEHOLDER.
+    All parameters are the FINAL RNA values (params.py): per-pair
+    U0 = params.HB_RNA_U0 * HB_MULT[(base_i, base_j)] (x2 A-U, x3 G-C, x2 G-U);
+    per-pair d0 = params.HB_R0[sorted(base_i, base_j)]; distinct angle/dihedral
+    references HB_TH1_0/HB_TH2_0/HB_PSI_0/HB_PSI1_0/HB_PSI2_0; force constants
+    HB_RNA_KR/HB_RNA_KTHETA/HB_RNA_KPSI.
 
     Parameters
     ----------
     sequence : str
         RNA sequence (A/G/C/U) of the single strand, used to find complementary
-        candidate pairs. For multi-strand, pass ``pairs`` explicitly instead.
-    d0, th0, ps0 : float
-        Reference geometry (PLACEHOLDER).
+        candidate pairs and their base identities (for d0 / multiplicity). For
+        multi-strand, pass ``pairs`` explicitly (with ``sequence`` for bases).
     k_d, k_theta, k_psi : float
-        Force constants (params.HB_KD/HB_KTHETA/HB_KPSI).
+        Force constants (params.HB_RNA_KR / HB_RNA_KTHETA / HB_RNA_KPSI).
+    u0_single : float
+        Single-H-bond well depth (params.HB_RNA_U0); scaled by multiplicity.
     contact_cutoff : float
         Distance gate (A).
     pairs : list[(i,j)], optional
-        Explicit candidate nucleotide-index pairs (overrides sequence scan),
-        each tagged with its multiplicity via ``pair_mult``.
+        Explicit candidate nucleotide-index pairs (overrides the sequence scan);
+        base identities for d0 / multiplicity are read from ``sequence`` if given.
     pair_mult : dict[(i,j)->int], optional
-        Multiplicity for explicit ``pairs``.
+        Multiplicity override for explicit ``pairs``.
     """
 
     def __init__(self, sequence: Optional[str] = None,
                  n_nucleotides: Optional[int] = None,
-                 d0: float = HB_D0_PLACEHOLDER,
-                 th0: float = HB_TH0_PLACEHOLDER,
-                 ps0: float = HB_PS0_PLACEHOLDER,
-                 k_d: float = params.HB_KD,
-                 k_theta: float = params.HB_KTHETA,
-                 k_psi: float = params.HB_KPSI,
+                 k_d: float = params.HB_RNA_KR,
+                 k_theta: float = params.HB_RNA_KTHETA,
+                 k_psi: float = params.HB_RNA_KPSI,
                  contact_cutoff: float = HB_CONTACT_CUTOFF,
                  min_seq_sep: int = HB_MIN_SEQ_SEP,
-                 u0_single: float = HB_U0_SINGLE,
+                 u0_single: float = params.HB_RNA_U0,
                  pairs: Optional[Sequence[Tuple[int, int]]] = None,
                  pair_mult: Optional[dict] = None):
+        seq = None
         if sequence is not None:
             seq = sequence.strip().upper().replace("T", "U")
             n_nucleotides = len(seq)
@@ -467,28 +513,46 @@ class TISHydrogenBonding(_ManyBodyCustomForce):
             raise ValueError("provide either sequence or n_nucleotides")
         super().__init__(3 * int(n_nucleotides))
         self.n_nucleotides = int(n_nucleotides)
-        self.d0 = float(d0)
-        self.th0 = float(th0)
-        self.ps0 = float(ps0)
         self.k_d = float(k_d)
         self.k_theta = float(k_theta)
         self.k_psi = float(k_psi)
         self.contact_cutoff = float(contact_cutoff)
         self.u0_single = float(u0_single)
 
-        # candidate (i,j,U0) pairs
-        self._candidates: List[Tuple[int, int, float]] = []
+        # distinct A-form reference angles / dihedrals (shared by all pairs).
+        self.th1_0 = params.HB_TH1_0
+        self.th2_0 = params.HB_TH2_0
+        self.ps1_0 = params.HB_PSI_0
+        self.ps2_0 = params.HB_PSI1_0
+        self.ps3_0 = params.HB_PSI2_0
+        self._d0_default = sum(params.HB_R0.values()) / len(params.HB_R0)
+
+        # candidate (i, j, U0, d0) tuples; d0 is per pair type.
+        self._candidates: List[Tuple[int, int, float, float]] = []
         if pairs is not None:
             for (i, j) in pairs:
-                mult = (pair_mult or {}).get((i, j), 2)
-                self._candidates.append((i, j, self.u0_single * mult))
+                mult, d0 = self._pair_params(seq, i, j, pair_mult)
+                self._candidates.append((i, j, self.u0_single * mult, d0))
         else:
             for a in range(self.n_nucleotides):
                 for b in range(a + min_seq_sep, self.n_nucleotides):
-                    mult = HB_MULTIPLICITY.get((seq[a], seq[b]))
+                    mult = params.HB_MULT.get((seq[a], seq[b]))
                     if mult is not None:
+                        d0 = params.HB_R0["".join(sorted((seq[a], seq[b])))]
                         self._candidates.append(
-                            (a, b, self.u0_single * mult))
+                            (a, b, self.u0_single * mult, d0))
+
+    def _pair_params(self, seq, i, j, pair_mult):
+        """(multiplicity, d0) for an explicit pair, from the sequence if given."""
+        if seq is not None:
+            key = "".join(sorted((seq[i], seq[j])))
+            mult = (pair_mult or {}).get(
+                (i, j), params.HB_MULT.get((seq[i], seq[j]), 2))
+            d0 = params.HB_R0.get(key, self._d0_default)
+        else:
+            mult = (pair_mult or {}).get((i, j), 2)
+            d0 = self._d0_default
+        return mult, d0
 
     @staticmethod
     def _coords_for(i: int, j: int):
@@ -503,15 +567,15 @@ class TISHydrogenBonding(_ManyBodyCustomForce):
             "ps3": (Pj, Sj, Bj, Bi),
         }
 
-    def _coords_list(self, i: int, j: int) -> List[Coord]:
+    def _coords_list(self, i: int, j: int, d0: float) -> List[Coord]:
         c = self._coords_for(i, j)
         return [
-            ("dist", c["d"], self.k_d, self.d0),
-            ("angle", c["th1"], self.k_theta, self.th0),
-            ("angle", c["th2"], self.k_theta, self.th0),
-            ("dihedral", c["ps1"], self.k_psi, self.ps0),
-            ("dihedral", c["ps2"], self.k_psi, self.ps0),
-            ("dihedral", c["ps3"], self.k_psi, self.ps0),
+            ("dist", c["d"], self.k_d, d0),
+            ("angle", c["th1"], self.k_theta, self.th1_0),
+            ("angle", c["th2"], self.k_theta, self.th2_0),
+            ("dihedral", c["ps1"], self.k_psi, self.ps1_0),
+            ("dihedral", c["ps2"], self.k_psi, self.ps2_0),
+            ("dihedral", c["ps3"], self.k_psi, self.ps3_0),
         ]
 
     def interactions(self, positions: np.ndarray, box: np.ndarray
@@ -519,13 +583,13 @@ class TISHydrogenBonding(_ManyBodyCustomForce):
         positions = np.asarray(positions, dtype=float)
         box = np.asarray(box, dtype=float)
         inters: List[Interaction] = []
-        for (i, j, U0) in self._candidates:
+        for (i, j, U0, d0) in self._candidates:
             Bi, Bj = 3 * i + 2, 3 * j + 2
             d = minimum_image(positions[Bi] - positions[Bj], box)
             if float(d @ d) <= self.contact_cutoff * self.contact_cutoff:
-                inters.append((U0, self._coords_list(i, j)))
+                inters.append((U0, self._coords_list(i, j, d0)))
         return inters
 
     def candidate_pairs(self) -> List[Tuple[int, int, float]]:
         """Complementary candidate (i, j, U0) triples (for tests / inspection)."""
-        return list(self._candidates)
+        return [(i, j, U0) for (i, j, U0, _d0) in self._candidates]
