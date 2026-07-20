@@ -107,3 +107,15 @@ ANGLE_DNA = {"PSP": (25.67, 123.30 * _DEG), "SPS": (67.50, 94.60 * _DEG),
              "PSA": (29.53, 107.38 * _DEG)}  # partial
 STACK_DNA_KL, STACK_DNA_KPHI = 1.45, 3.00
 HB_DNA_U0, HB_DNA_KD, HB_DNA_KTHETA, HB_DNA_KPSI = -1.92, 4.00, 1.50, 0.15
+
+
+# --- compat aliases (names the current engine imports) -> RNA values ---
+# The engine (io.py/forces.py/custom_forces.py) still imports the pre-paper names;
+# point them at the RNA constants. (Bond/angle wiring still uses BOND_DNA/ANGLE_DNA
+# placeholder geometry until the A-form reference geometry is generated.)
+STACK_KL = STACK_RNA_KR
+STACK_KPHI = STACK_RNA_KPHI
+HB_KD = HB_RNA_KR
+HB_KTHETA = HB_RNA_KTHETA
+HB_KPSI = HB_RNA_KPSI
+DH_MANNING_B_DNA = DH_B_RNA
