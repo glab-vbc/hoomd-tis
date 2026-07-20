@@ -42,6 +42,7 @@ import itertools
 import math
 from typing import Optional
 
+import numpy as np
 import hoomd
 import hoomd.md as md
 
@@ -112,6 +113,9 @@ def build_forces(
     nlist_buffer: float = 0.4,
     exclusions=("bond", "angle"),
     manning_b: float = params.DH_MANNING_B_DNA,
+    include_custom: bool = False,
+    stacking_kwargs: Optional[dict] = None,
+    hbond_kwargs: Optional[dict] = None,
 ):
     """Assemble the four native TIS forces for the topology in ``snapshot``.
 
@@ -183,36 +187,67 @@ def build_forces(
             dh.params[(a, b)] = dict(epsilon=0.0, kappa=kappa)
             dh.r_cut[(a, b)] = 0.0
 
-    return [bond, angle, wca, dh], nlist
+    force_list = [bond, angle, wca, dh]
+
+    # Optionally append the two many-body custom terms (stacking + HB), giving
+    # the FULL 6-term TIS model. Native four stay intact and first in the list.
+    if include_custom:
+        force_list.append(stacking_force(snapshot, **(stacking_kwargs or {})))
+        force_list.append(
+            hydrogen_bonding_force(snapshot, **(hbond_kwargs or {})))
+
+    return force_list, nlist
 
 
 # --------------------------------------------------------------------------- #
-# TODO: custom many-body terms (need C++ ForceComputes)                        #
+# Many-body terms (Python custom forces with analytic, FD-verified forces)      #
 # --------------------------------------------------------------------------- #
-def stacking_force(*args, **kwargs):
-    """TODO -- single-stranded stacking U_S (MODEL.md sec. 3, Eq. 9).
+# These were previously C++-ForceCompute stubs. They are now implemented in
+# tis/custom_forces.py as hoomd.md.force.Custom subclasses (analytic forces,
+# validated by finite difference in pytest/test_custom_fd.py). The functional
+# forms are exact (MODEL.md Eq. 9 / 13); the reference geometry and well depths
+# are PLACEHOLDER (RNA tables still TODO) -- see custom_forces.py for which
+# choices are provisional. Imported lazily so the native-only path (build_forces
+# without include_custom) never imports numpy-heavy custom code needlessly.
 
-    Many-body term over consecutive bases: one base-base distance + two backbone
-    dihedrals, with a temperature/sequence-dependent well depth
-    U_S0 = -h + kB (T - Tm) s. Requires a custom C++ ForceCompute (same pattern
-    as the oxDNA bonded force) plus the RNA stacking table + reference geometry,
-    which are not yet in params.py (STACK_RNA / STACK_GEOM_RNA are empty).
+
+def _sequence_from_snapshot(snapshot: hoomd.Snapshot) -> str:
+    """Recover the base sequence (A/G/C/U) from a TIS snapshot's B-site types."""
+    types = list(snapshot.particles.types)
+    typeid = list(snapshot.particles.typeid)
+    n = snapshot.particles.N // 3
+    return "".join(types[typeid[3 * k + 2]] for k in range(n))
+
+
+def stacking_force(snapshot: hoomd.Snapshot, **kwargs):
+    """Single-stranded stacking U_S (MODEL.md sec. 3, Eq. 9) as a custom force.
+
+    Consecutive-base term: base-base distance + two backbone dihedrals. Force
+    constants k_l / k_phi are the real params.STACK_KL / STACK_KPHI; the well
+    depth U0 and the per-step reference geometry (l0, phi1_0, phi2_0) are
+    PLACEHOLDER -- by default the references are measured from the initial
+    ``snapshot`` geometry so U ~ U0 at t=0. See custom_forces.TISStacking.
+
+    Extra ``kwargs`` are forwarded to TISStacking (U0, k_l, k_phi, strands).
     """
-    raise NotImplementedError(
-        "stacking (U_S) needs a custom C++ ForceCompute and RNA stacking "
-        "parameters (params.STACK_RNA / STACK_GEOM_RNA are TODO)."
-    )
+    from . import custom_forces as cf
+    n = snapshot.particles.N // 3
+    pos = np.asarray(snapshot.particles.position, dtype=float)
+    box = np.asarray(snapshot.configuration.box[:3], dtype=float)
+    return cf.TISStacking(n, ref_positions=pos, box=box, **kwargs)
 
 
-def hydrogen_bonding_force(*args, **kwargs):
-    """TODO -- hydrogen bonding U_HB (MODEL.md sec. 4, Eq. 13).
+def hydrogen_bonding_force(snapshot: hoomd.Snapshot, **kwargs):
+    """Hydrogen bonding U_HB (MODEL.md sec. 4, Eq. 13) as a custom force.
 
-    Many-body term over complementary bases: one distance + two angles + three
-    dihedrals, x2 for A-U and x3 for G-C (plus the RNA G-U wobble). Requires a
-    custom C++ ForceCompute plus the HB reference geometry, which is not yet in
-    params.py (HB_GEOM is empty).
+    Complementary-base term (A-U, G-C, G-U wobble; sequence separation >= 3),
+    distance-gated. Force constants k_d / k_theta / k_psi are the real
+    params.HB_KD / HB_KTHETA / HB_KPSI; the well depths (x2 A-U, x3 G-C, x2 G-U*)
+    and the reference geometry (d0/theta0/psi0) are PLACEHOLDER. See
+    custom_forces.TISHydrogenBonding.
+
+    Extra ``kwargs`` are forwarded to TISHydrogenBonding.
     """
-    raise NotImplementedError(
-        "hydrogen bonding (U_HB) needs a custom C++ ForceCompute and HB "
-        "reference geometry (params.HB_GEOM is TODO)."
-    )
+    from . import custom_forces as cf
+    seq = _sequence_from_snapshot(snapshot)
+    return cf.TISHydrogenBonding(sequence=seq, **kwargs)

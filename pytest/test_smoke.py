@@ -86,8 +86,11 @@ def test_forces_are_the_four_native_terms():
     assert kinds == ["Harmonic", "Harmonic", "LJ", "Yukawa"]
 
 
-def test_custom_terms_are_stubbed():
-    with pytest.raises(NotImplementedError):
-        forces.stacking_force()
-    with pytest.raises(NotImplementedError):
-        forces.hydrogen_bonding_force()
+def test_custom_terms_build():
+    # The stacking / HB terms are now implemented (analytic Python custom forces,
+    # FD-validated in test_custom_fd.py); they build from a snapshot.
+    snap = io.build_strand_snapshot("GCGCGC")
+    st = forces.stacking_force(snap)
+    hb = forces.hydrogen_bonding_force(snap)
+    assert type(st).__name__ == "TISStacking"
+    assert type(hb).__name__ == "TISHydrogenBonding"
