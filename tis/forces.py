@@ -128,6 +128,7 @@ def build_forces(
     include_custom: bool = False,
     stacking_kwargs: Optional[dict] = None,
     hbond_kwargs: Optional[dict] = None,
+    backend: str = "auto",
 ):
     """Assemble the four native TIS forces for the topology in ``snapshot``.
 
@@ -203,13 +204,46 @@ def build_forces(
 
     # Optionally append the two many-body custom terms (stacking + HB), giving
     # the FULL 6-term TIS model. Native four stay intact and first in the list.
+    #
+    # backend selects the many-body evaluator:
+    #   "cpp"    -> compiled tis._engine (fast; requires the built plugin)
+    #   "python" -> pure-Python analytic custom forces (tis.custom_forces)
+    #   "auto"   -> "cpp" when the engine imports, else "python" (default)
     if include_custom:
-        force_list.append(stacking_force(snapshot, temperature=temperature,
-                                         **(stacking_kwargs or {})))
-        force_list.append(
-            hydrogen_bonding_force(snapshot, **(hbond_kwargs or {})))
+        use_cpp = _resolve_backend(backend)
+        if use_cpp:
+            from . import cpp_forces as cff
+            force_list.append(cff.stacking_force(snapshot, temperature=temperature,
+                                                 **(stacking_kwargs or {})))
+            force_list.append(
+                cff.hydrogen_bonding_force(snapshot, **(hbond_kwargs or {})))
+        else:
+            force_list.append(stacking_force(snapshot, temperature=temperature,
+                                             **(stacking_kwargs or {})))
+            force_list.append(
+                hydrogen_bonding_force(snapshot, **(hbond_kwargs or {})))
 
     return force_list, nlist
+
+
+def _resolve_backend(backend: str) -> bool:
+    """Return True to use the compiled C++ many-body backend, else False.
+
+    ``backend`` is "cpp", "python", or "auto" (cpp when tis._engine imports,
+    else python). Raises if "cpp" is requested but the engine is unavailable.
+    """
+    from . import cpp_forces as cff
+    if backend == "python":
+        return False
+    if backend == "cpp":
+        if not cff.available():
+            raise ImportError(
+                "backend='cpp' requested but the compiled tis._engine is not "
+                "importable; build the plugin (see README) or use backend='auto'.")
+        return True
+    if backend == "auto":
+        return cff.available()
+    raise ValueError(f"backend must be 'cpp', 'python', or 'auto' (got {backend!r})")
 
 
 # --------------------------------------------------------------------------- #

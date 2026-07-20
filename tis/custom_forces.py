@@ -452,6 +452,13 @@ class TISStacking(_ManyBodyCustomForce):
             inters.append((U0, coords))
         return inters
 
+    def gated_interactions(self) -> List[Tuple[float, List[Coord], object]]:
+        """(U0, coords, gate) for every interaction. Stacking is never
+        distance-gated so ``gate`` is always ``None``. This is the position-
+        independent superset consumed by the compiled C++ engine (which
+        re-evaluates gates, here trivially always-on, every step)."""
+        return [(U0, coords, None) for (U0, coords) in self.interactions()]
+
 
 # --------------------------------------------------------------------------- #
 # 4. Hydrogen bonding  U_HB  (MODEL.md sec. 4, Eq. 13)                          #
@@ -593,3 +600,16 @@ class TISHydrogenBonding(_ManyBodyCustomForce):
     def candidate_pairs(self) -> List[Tuple[int, int, float]]:
         """Complementary candidate (i, j, U0) triples (for tests / inspection)."""
         return [(i, j, U0) for (i, j, U0, _d0) in self._candidates]
+
+    def gated_interactions(self) -> List[Tuple[float, List[Coord], object]]:
+        """(U0, coords, gate) for EVERY candidate pair (not just the currently
+        active ones). ``gate = (B_i tag, B_j tag, contact_cutoff)``: the C++
+        engine keeps the interaction only while |B_i - B_j| <= cutoff, exactly
+        reproducing ``interactions()``'s per-step distance gate. This is the
+        position-independent superset consumed by the compiled engine."""
+        out: List[Tuple[float, List[Coord], object]] = []
+        for (i, j, U0, d0) in self._candidates:
+            Bi, Bj = 3 * i + 2, 3 * j + 2
+            out.append((U0, self._coords_list(i, j, d0),
+                        (Bi, Bj, self.contact_cutoff)))
+        return out

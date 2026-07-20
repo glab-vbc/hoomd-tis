@@ -277,9 +277,11 @@ def test_full_six_term_model_stable():
     sim = hoomd.Simulation(device=hoomd.device.CPU(), seed=7)
     sim.create_state_from_snapshot(snap)
 
+    # this test exercises the pure-Python analytic custom forces specifically
+    # (the compiled backend has its own stability test in test_cpp.py).
     force_list, _ = forces.build_forces(snap, temperature=300.0,
                                         ionic_strength_M=0.15,
-                                        include_custom=True)
+                                        include_custom=True, backend="python")
     kinds = [type(f).__name__ for f in force_list]
     assert kinds == ["Harmonic", "Harmonic", "LJ", "Yukawa",
                      "TISStacking", "TISHydrogenBonding"]

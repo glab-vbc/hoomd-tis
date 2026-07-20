@@ -1,5 +1,5 @@
 get_filename_component(TIS_PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../tis" ABSOLUTE)
-set(_engine_sources module.cc TISStackingForceCompute.cc)
+set(_engine_sources module.cc TISManyBodyForceCompute.cc)
 set(_engine_headers TISForces.h MixedPrecisionCompat.h)
 hoomd_add_module(_engine SHARED ${_engine_sources} ${_engine_headers} NO_EXTRAS)
 target_link_libraries(_engine PUBLIC HOOMD::_hoomd HOOMD::_md)
